@@ -7,6 +7,7 @@ pydantic
 cloudinary
 python-multipart
 bcrypt
-passlib
-python-jose
+passlib[bcrypt]
+python-jose[cryptography]
 dnspython
+gunicorn
