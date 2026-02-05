@@ -181,8 +181,11 @@ async def admin_login(data: AdminLogin):
 
 @api.get("/home-content")
 async def get_home_content():
-    # Busca por "home" ou "Casa" para garantir que pegue o documento existente
-    data = await db.home_content.find_one({"slug": {"$in": ["home", "Casa"]}}, {"_id": 0})
+    # Prioriza o documento com slug "home" (formato novo salvo pelo admin)
+    data = await db.home_content.find_one({"slug": "home"}, {"_id": 0})
+    # Se nao encontrar, tenta o slug antigo "Casa" como fallback
+    if not data:
+        data = await db.home_content.find_one({"slug": "Casa"}, {"_id": 0})
     return data or HomeContent().model_dump()
 
 @api.put("/home-content")
@@ -201,7 +204,10 @@ async def update_home_content(data: dict, user: str = Depends(verify_token)):
         if isinstance(data["sobre"].get("mensagens"), str):
             data["sobre"]["mensagens"] = [line.strip() for line in data["sobre"]["mensagens"].split('\n') if line.strip()]
 
-    # 4. Usa replace_one para limpar chaves antigas (como 'Herói' ou 'Marca') e salvar o novo formato
+    # 4. Remove documento antigo com slug "Casa" se existir (evita duplicidade)
+    await db.home_content.delete_many({"slug": "Casa"})
+
+    # 5. Usa replace_one para salvar o documento atualizado com slug "home"
     await db.home_content.replace_one({"slug": "home"}, data, upsert=True)
     return {"ok": True}
 
