@@ -66,12 +66,12 @@ api = APIRouter(prefix="/api")
 security = HTTPBearer()
 
 # =========================
-# CORS - Atualizado para seu novo domínio
+# CORS
 # =========================
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], # Pode restringir para ["https://centraljoias.com.br"] depois
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -137,7 +137,7 @@ class HomeContent(BaseModel):
     footer: HomeFooter = HomeFooter()
 
 # =========================
-# MODELS — PRODUCTS (Corrigido para aceitar especificações do Painel)
+# MODELS — PRODUCTS
 # =========================
 
 class ProductCarousel(BaseModel):
@@ -154,7 +154,6 @@ class Product(BaseModel):
     promo_active: bool = False
     promo_price: Optional[float] = None
     images: List[str] = []
-    # Alterado de specs (lista) para specifications (dict) para casar com o React
     specifications: dict = {} 
     carousel: ProductCarousel = ProductCarousel()
     active: bool = True
@@ -177,22 +176,33 @@ async def admin_login(data: AdminLogin):
     return {"access_token": token, "token_type": "bearer"}
 
 # =========================
-# ROTAS - HOME CONTENT (Lógica de salvamento forçado)
+# ROTAS - HOME CONTENT (AJUSTADA)
 # =========================
 
 @api.get("/home-content")
 async def get_home_content():
-    data = await db.home_content.find_one({"slug": "home"}, {"_id": 0})
+    # Busca por "home" ou "Casa" para garantir que pegue o documento existente
+    data = await db.home_content.find_one({"slug": {"$in": ["home", "Casa"]}}, {"_id": 0})
     return data or HomeContent().model_dump()
 
 @api.put("/home-content")
 async def update_home_content(data: dict, user: str = Depends(verify_token)):
-    # Usamos o $set para garantir que campos complexos (listas/objetos) sejam substituídos
-    await db.home_content.update_one(
-        {"slug": "home"},
-        {"$set": data},
-        upsert=True
-    )
+    # 1. Força o slug correto para evitar duplicidade
+    data["slug"] = "home"
+
+    # 2. Converte Hero Texto de String para Lista (se vier do textarea do Admin)
+    if "hero" in data and isinstance(data["hero"].get("texto"), str):
+        data["hero"]["texto"] = [line.strip() for line in data["hero"]["texto"].split('\n') if line.strip()]
+
+    # 3. Converte Sobre Textos e Mensagens de String para Lista
+    if "sobre" in data:
+        if isinstance(data["sobre"].get("textos"), str):
+            data["sobre"]["textos"] = [line.strip() for line in data["sobre"]["textos"].split('\n') if line.strip()]
+        if isinstance(data["sobre"].get("mensagens"), str):
+            data["sobre"]["mensagens"] = [line.strip() for line in data["sobre"]["mensagens"].split('\n') if line.strip()]
+
+    # 4. Usa replace_one para limpar chaves antigas (como 'Herói' ou 'Marca') e salvar o novo formato
+    await db.home_content.replace_one({"slug": "home"}, data, upsert=True)
     return {"ok": True}
 
 # =========================
@@ -210,7 +220,6 @@ async def create_product(product: Product, user: str = Depends(verify_token)):
 
 @api.put("/products/{id}")
 async def update_product(id: str, data: dict, user: str = Depends(verify_token)):
-    # Remove o ID do corpo para não tentar atualizar a chave primária
     if "id" in data: del data["id"]
     await db.products.update_one({"id": id}, {"$set": data})
     return {"ok": True}
