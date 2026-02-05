@@ -176,38 +176,42 @@ async def admin_login(data: AdminLogin):
     return {"access_token": token, "token_type": "bearer"}
 
 # =========================
-# ROTAS - HOME CONTENT (AJUSTADA)
+# ROTAS - HOME CONTENT (AJUSTADA E CORRIGIDA)
 # =========================
 
 @api.get("/home-content")
 async def get_home_content():
-    # Prioriza o documento com slug "home" (formato novo salvo pelo admin)
     data = await db.home_content.find_one({"slug": "home"}, {"_id": 0})
-    # Se nao encontrar, tenta o slug antigo "Casa" como fallback
     if not data:
         data = await db.home_content.find_one({"slug": "Casa"}, {"_id": 0})
     return data or HomeContent().model_dump()
 
 @api.put("/home-content")
 async def update_home_content(data: dict, user: str = Depends(verify_token)):
-    # 1. Força o slug correto para evitar duplicidade
+    # 1. Força o slug único
     data["slug"] = "home"
 
-    # 2. Converte Hero Texto de String para Lista (se vier do textarea do Admin)
-    if "hero" in data and isinstance(data["hero"].get("texto"), str):
-        data["hero"]["texto"] = [line.strip() for line in data["hero"]["texto"].split('\n') if line.strip()]
+    # 2. Hero Texto (Trata se o frontend mandou String ou Lista)
+    if "hero" in data:
+        h_texto = data["hero"].get("texto")
+        if isinstance(h_texto, str):
+            data["hero"]["texto"] = [l.strip() for l in h_texto.split('\n') if l.strip()]
 
-    # 3. Converte Sobre Textos e Mensagens de String para Lista
+    # 3. Sobre Textos e Mensagens (Trata se o frontend mandou String ou Lista)
     if "sobre" in data:
-        if isinstance(data["sobre"].get("textos"), str):
-            data["sobre"]["textos"] = [line.strip() for line in data["sobre"]["textos"].split('\n') if line.strip()]
-        if isinstance(data["sobre"].get("mensagens"), str):
-            data["sobre"]["mensagens"] = [line.strip() for line in data["sobre"]["mensagens"].split('\n') if line.strip()]
+        s_textos = data["sobre"].get("textos")
+        s_mensagens = data["sobre"].get("mensagens")
+        
+        if isinstance(s_textos, str):
+            data["sobre"]["textos"] = [l.strip() for l in s_textos.split('\n') if l.strip()]
+        
+        if isinstance(s_mensagens, str):
+            data["sobre"]["mensagens"] = [l.strip() for l in s_mensagens.split('\n') if l.strip()]
 
-    # 4. Remove documento antigo com slug "Casa" se existir (evita duplicidade)
+    # 4. Limpeza de slugs antigos
     await db.home_content.delete_many({"slug": "Casa"})
 
-    # 5. Usa replace_one para salvar o documento atualizado com slug "home"
+    # 5. Upsert (Salva novo ou substitui existente)
     await db.home_content.replace_one({"slug": "home"}, data, upsert=True)
     return {"ok": True}
 
