@@ -9,7 +9,7 @@ from motor.motor_asyncio import AsyncIOMotorClient
 from dotenv import load_dotenv
 from pathlib import Path
 from pydantic import BaseModel, Field
-from typing import List, Optional
+from typing import List, Optional, Any
 from datetime import datetime, timezone, timedelta
 from jose import JWTError, jwt
 import cloudinary
@@ -23,7 +23,6 @@ import os, uuid, logging
 ROOT_DIR = Path(__file__).parent
 load_dotenv()
 
-
 MONGO_URL = os.getenv("MONGO_URL")
 DB_NAME = os.getenv("DB_NAME")
 
@@ -33,12 +32,12 @@ JWT_EXPIRATION_HOURS = int(os.getenv("JWT_EXPIRATION_HOURS", 24))
 
 ADMIN_USER = os.getenv("ADMIN_USERNAME")
 ADMIN_PASS = os.getenv("ADMIN_PASSWORD")
+
 if not MONGO_URL or not DB_NAME:
     raise RuntimeError("MongoDB não configurado")
 
 if not JWT_SECRET or not JWT_ALGORITHM:
     raise RuntimeError("JWT não configurado")
-
 
 # =========================
 # CLOUDINARY
@@ -67,17 +66,16 @@ api = APIRouter(prefix="/api")
 security = HTTPBearer()
 
 # =========================
-# CORS
+# CORS - Atualizado para seu novo domínio
 # =========================
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=False,
+    allow_origins=["*"], # Pode restringir para ["https://centraljoias.com.br"] depois
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
 
 # =========================
 # AUTH
@@ -139,23 +137,8 @@ class HomeContent(BaseModel):
     footer: HomeFooter = HomeFooter()
 
 # =========================
-# MODELS — CATEGORIES
+# MODELS — PRODUCTS (Corrigido para aceitar especificações do Painel)
 # =========================
-
-class Category(BaseModel):
-    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    nome: str
-    slug: str
-    ativo: bool = True
-    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-
-# =========================
-# MODELS — PRODUCTS
-# =========================
-
-class ProductSpec(BaseModel):
-    label: str
-    value: str
 
 class ProductCarousel(BaseModel):
     home: bool = False
@@ -165,53 +148,36 @@ class ProductCarousel(BaseModel):
 
 class Product(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-
     name: str
     category: str
-
     price: float
-
-    # 🔥 PROMOÇÃO (ADICIONADO)
     promo_active: bool = False
     promo_price: Optional[float] = None
-
     images: List[str] = []
-    specs: List[ProductSpec] = []
-
+    # Alterado de specs (lista) para specifications (dict) para casar com o React
+    specifications: dict = {} 
     carousel: ProductCarousel = ProductCarousel()
-
     active: bool = True
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 # =========================
-# AUTH — ADMIN LOGIN
+# ROTAS - AUTH
 # =========================
 
 class AdminLogin(BaseModel):
     username: str
     password: str
 
-class Token(BaseModel):
-    access_token: str
-    token_type: str
-
-@api.post("/admin/login", response_model=Token)
+@api.post("/admin/login")
 async def admin_login(data: AdminLogin):
     if data.username != ADMIN_USER or data.password != ADMIN_PASS:
         raise HTTPException(status_code=401, detail="Credenciais inválidas")
-
     expire = datetime.now(timezone.utc) + timedelta(hours=JWT_EXPIRATION_HOURS)
-
-    token = jwt.encode(
-        {"sub": data.username, "exp": expire},
-        JWT_SECRET,
-        algorithm=JWT_ALGORITHM,
-    )
-
+    token = jwt.encode({"sub": data.username, "exp": expire}, JWT_SECRET, algorithm=JWT_ALGORITHM)
     return {"access_token": token, "token_type": "bearer"}
 
 # =========================
-# HOME CONTENT
+# ROTAS - HOME CONTENT (Lógica de salvamento forçado)
 # =========================
 
 @api.get("/home-content")
@@ -220,10 +186,8 @@ async def get_home_content():
     return data or HomeContent().model_dump()
 
 @api.put("/home-content")
-async def update_home_content(
-    data: dict,
-    user: str = Depends(verify_token)
-):
+async def update_home_content(data: dict, user: str = Depends(verify_token)):
+    # Usamos o $set para garantir que campos complexos (listas/objetos) sejam substituídos
     await db.home_content.update_one(
         {"slug": "home"},
         {"$set": data},
@@ -232,75 +196,36 @@ async def update_home_content(
     return {"ok": True}
 
 # =========================
-# CATEGORIES
-# =========================
-
-@api.get("/categories")
-async def get_categories():
-    return await db.categories.find(
-        {"ativo": True},
-        {"_id": 0}
-    ).to_list(1000)
-
-@api.post("/categories")
-async def create_category(
-    category: Category,
-    user: str = Depends(verify_token)
-):
-    await db.categories.insert_one(category.model_dump())
-    return category
-
-# =========================
-# PRODUCTS
+# ROTAS - PRODUCTS
 # =========================
 
 @api.get("/products")
 async def get_products():
-    return await db.products.find(
-        {"active": True},
-        {"_id": 0}
-    ).to_list(1000)
+    return await db.products.find({"active": True}, {"_id": 0}).to_list(1000)
 
 @api.post("/products")
-async def create_product(
-    product: Product,
-    user: str = Depends(verify_token)
-):
+async def create_product(product: Product, user: str = Depends(verify_token)):
     await db.products.insert_one(product.model_dump())
     return product
 
 @api.put("/products/{id}")
-async def update_product(
-    id: str,
-    data: dict,
-    user: str = Depends(verify_token)
-):
-    await db.products.update_one(
-        {"id": id},
-        {"$set": data}
-    )
+async def update_product(id: str, data: dict, user: str = Depends(verify_token)):
+    # Remove o ID do corpo para não tentar atualizar a chave primária
+    if "id" in data: del data["id"]
+    await db.products.update_one({"id": id}, {"$set": data})
     return {"ok": True}
 
 @api.delete("/products/{id}")
-async def delete_product(
-    id: str,
-    user: str = Depends(verify_token)
-):
-    await db.products.update_one(
-        {"id": id},
-        {"$set": {"active": False}}
-    )
+async def delete_product(id: str, user: str = Depends(verify_token)):
+    await db.products.update_one({"id": id}, {"$set": {"active": False}})
     return {"ok": True}
 
 # =========================
-# UPLOAD — CLOUDINARY
+# UPLOAD
 # =========================
 
 @api.post("/upload")
-async def upload_image(
-    file: UploadFile = File(...),
-    user: str = Depends(verify_token)
-):
+async def upload_image(file: UploadFile = File(...), user: str = Depends(verify_token)):
     try:
         result = cloudinary.uploader.upload(
             file.file,
